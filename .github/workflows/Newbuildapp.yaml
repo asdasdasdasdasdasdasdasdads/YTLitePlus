@@ -55,6 +55,14 @@ jobs:
     permissions:
       contents: write
 
+    env:
+      THEOS: ${{ github.workspace }}/theos
+      YOUTUBE_URL: ${{ inputs.decrypted_youtube_url }}
+      BUNDLE_ID: ${{ inputs.bundle_id }}
+      APP_NAME: ${{ inputs.app_name }}
+      SDK_VER: ${{ inputs.sdk_version }}
+      YTLITE_VERSION: "5.0.1"
+
     steps:
       - name: Checkout Main
         uses: actions/checkout@v4
@@ -97,13 +105,11 @@ jobs:
       - name: Download iOS SDK
         if: steps.SDK.outputs.cache-hit != 'true'
         run: |
-          git clone -n --depth=1 --filter=tree:0 https://github.com/aricloverALT/sdks/
+          git clone -n --depth=1 --filter=tree:0 https://github.com/aricloverALT/sdks/ sdks
           cd sdks
-          git sparse-checkout set --no-cone "iPhoneOS${{ inputs.sdk_version }}.sdk"
+          git sparse-checkout set --no-cone "iPhoneOS${SDK_VER}.sdk"
           git checkout
           mv *.sdk "$THEOS/sdks"
-        env:
-          THEOS: ${{ github.workspace }}/theos
 
       - name: Download Theos Jailed
         uses: actions/checkout@v4
@@ -115,70 +121,54 @@ jobs:
 
       - name: Install Theos Jailed
         run: ./theos-jailed/install
-        env:
-          THEOS: ${{ github.workspace }}/theos
 
-      - name: Fix Compiling
+      - name: Prefer GNU make (gnubin)
         run: echo "$(brew --prefix make)/libexec/gnubin" >> "$GITHUB_PATH"
 
-      - name: Hash YT ipa url
-        run: |
-          URL_YT="$(jq -r '.inputs.decrypted_youtube_url' "$GITHUB_EVENT_PATH")"
-          echo ::add-mask::$URL_YT
-          echo "URL_YT=$URL_YT" >> "$GITHUB_ENV"
-
       - name: Prepare YouTube iPA
-        env:
-          THEOS: ${{ github.workspace }}/theos
-          YOUTUBE_URL: ${{ env.URL_YT }}
         run: |
           # Download and unzip iPA
-          curl -L "$YOUTUBE_URL" -o main/YouTube.ipa
+          curl -fL "$YOUTUBE_URL" -o main/YouTube.ipa
           unzip -q main/YouTube.ipa -d main/tmp
 
-          # Extract YouTube CFBundleVersion
+          # Extract YouTube CFBundleVersion and export for later steps
           echo "YT_VERSION=$(grep -A 1 '<key>CFBundleVersion</key>' main/tmp/Payload/YouTube.app/Info.plist | grep '<string>' | awk -F'[><]' '{print $3}')" >> "$GITHUB_ENV"
 
-          # (Optional) detect latest release; we keep 5.0.1 pinned below
-          curl -sL https://github.com/dayanch96/YTLite/releases/latest > main/tmp/release_page.html
-          echo "YTLITE_VERSION=5.0.1" >> "$GITHUB_ENV"
-
-          # Strip signatures & plugins
+          # Remove contents that interfere with sideloading
           rm -rf main/tmp/Payload/YouTube.app/_CodeSignature/CodeResources
           rm -rf main/tmp/Payload/YouTube.app/PlugIns/*
 
-          # Remove UISupportedDevices via python (no heredoc)
-          python3 -c "import plistlib,sys; p='main/tmp/Payload/YouTube.app/Info.plist'; d=plistlib.load(open(p,'rb')); d.pop('UISupportedDevices',None); plistlib.dump(d, open(p,'wb'))"
+          # Remove UISupportedDevices via python (simple one-liner)
+          python3 -c "import plistlib; p='main/tmp/Payload/YouTube.app/Info.plist'; d=plistlib.load(open(p,'rb')); d.pop('UISupportedDevices',None); plistlib.dump(d, open(p,'wb'))"
 
-          # Re-add extension
+          # Manually install the Open in YouTube extension
           cp -R main/Extensions/*.appex main/tmp/Payload/YouTube.app/PlugIns
 
       - name: Build Package
         id: build_package
-        env:
-          THEOS: ${{ github.workspace }}/theos
-          BUNDLE_ID: ${{ inputs.bundle_id }}
-          APP_NAME: ${{ inputs.app_name }}
         run: |
           cd "${{ github.workspace }}/main"
 
-          # Update Makefile fields (BSD sed)
-          sed -i '' "s/^BUNDLE_ID.*$/BUNDLE_ID = ${{ env.BUNDLE_ID }}/" Makefile
-          sed -i '' "s/^DISPLAY_NAME.*$/DISPLAY_NAME = ${{ env.APP_NAME }}/" Makefile
-          sed -i '' "s/^PACKAGE_VERSION.*$/PACKAGE_VERSION = ${{ env.YT_VERSION }}-5.0.1/" Makefile
-          sed -i '' "s/^export TARGET.*$/export TARGET = iphone:clang:${{ inputs.sdk_version }}:14.0/" Makefile
-          sed -i '' "s%^export SDK_PATH.*$%export SDK_PATH = \$(THEOS)/sdks/iPhoneOS${{ inputs.sdk_version }}.sdk/%" Makefile
+          # Update Makefile fields (BSD sed on macOS)
+          sed -i '' "s/^BUNDLE_ID.*$/BUNDLE_ID = $BUNDLE_ID/" Makefile
+          sed -i '' "s/^DISPLAY_NAME.*$/DISPLAY_NAME = $APP_NAME/" Makefile
+          sed -i '' "s/^PACKAGE_VERSION.*$/PACKAGE_VERSION = ${YT_VERSION}-${YTLITE_VERSION}/" Makefile
+          sed -i '' "s/^export TARGET.*$/export TARGET = iphone:clang:${SDK_VER}:14.0/" Makefile
+          sed -i '' "s%^export SDK_PATH.*$%export SDK_PATH = \$(THEOS)/sdks/iPhoneOS${SDK_VER}.sdk/%" Makefile
 
+          # Build
           make package THEOS_PACKAGE_SCHEME=rootless FINALPACKAGE=1
 
-          # Rename and expose package name
+          # Rename the latest package to include versions
           latest_pkg="$(ls -t packages | head -n1)"
-          mv "packages/$latest_pkg" "packages/YTLitePlus_${{ env.YT_VERSION }}_5.0.1.ipa"
+          mv "packages/$latest_pkg" "packages/YTLitePlus_${YT_VERSION}_${YTLITE_VERSION}.ipa"
+
+          # Expose filename to later steps
           echo "package=$(ls -t packages | head -n1)" >> "$GITHUB_OUTPUT"
 
-          # Summary bits
+          # Console summary
           echo "==> SHASUM256: $(shasum -a 256 packages/*.ipa | cut -f1 -d' ')"
-          echo "==> Bundle ID: ${{ env.BUNDLE_ID }}"
+          echo "==> Bundle ID: $BUNDLE_ID"
 
       - name: Upload Artifact
         if: ${{ inputs.upload_artifact }}
@@ -202,7 +192,7 @@ jobs:
         if: ${{ inputs.create_release }}
         run: |
           TODAY="$(date '+%Y-%m-%d')"
-          sed "s/%ytliteplus_version%/${{ env.YTLITE_VERSION }}/g; s/%youtube_version%/5.0.1/g; s/%catbox_url%/${{ env.CATBOX_FILE }}/g; s/%date%/$TODAY/g" \
+          sed "s/%ytliteplus_version%/${YTLITE_VERSION}/g; s/%youtube_version%/${YT_VERSION}/g; s/%catbox_url%/${CATBOX_FILE}/g; s/%date%/$TODAY/g" \
             main/.github/RELEASE_TEMPLATE/Release.md > "${{ github.workspace }}/release_notes.md"
 
       - name: Create Draft Release
@@ -212,8 +202,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: v${{ env.YT_VERSION }}-5.0.1
-          name: v${{ env.YT_VERSION }}-5.0.1 - YTLitePlus
+          tag_name: v${{ env.YT_VERSION }}-${{ env.YTLITE_VERSION }}
+          name: v${{ env.YT_VERSION }}-${{ env.YTLITE_VERSION }} - YTLitePlus
           files: main/packages/*.ipa
           draft: true
           body_path: ${{ github.workspace }}/release_notes.md
@@ -224,9 +214,9 @@ jobs:
           curl -L -X POST "https://api.github.com/repos/Balackburn/YTLitePlusAltstore/actions/workflows/update_source.yml/dispatches" \
             -H "Authorization: token ${{ secrets.PERSONAL_ACCESS_TOKEN }}" \
             -H "Content-Type: application/json" \
-            -d "{\"ref\":\"main\",\"inputs\":{\"yt_lite_plus_url\":\"${{ env.CATBOX_URL }}\",\"yt_lite_plus_version\":\"${{ env.YTLITE_VERSION }}\",\"yt_version\":\"${{ env.YT_VERSION }}\"}}"
+            -d "{\"ref\":\"main\",\"inputs\":{\"yt_lite_plus_url\":\"${CATBOX_URL}\",\"yt_lite_plus_version\":\"${YTLITE_VERSION}\",\"yt_version\":\"${YT_VERSION}\"}}"
 
-            - name: Job Summary
+      - name: Job Summary
         run: |
           echo "### 📺 Build Complete" >> "$GITHUB_STEP_SUMMARY"
 
