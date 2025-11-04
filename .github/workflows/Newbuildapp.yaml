@@ -226,32 +226,43 @@ jobs:
             -H "Content-Type: application/json" \
             -d "{\"ref\":\"main\",\"inputs\":{\"yt_lite_plus_url\":\"${{ env.CATBOX_URL }}\",\"yt_lite_plus_version\":\"${{ env.YTLITE_VERSION }}\",\"yt_version\":\"${{ env.YT_VERSION }}\"}}"
 
-      - name: Job Summary
-        run: echo "### 📺 Build Complete" >> "$GITHUB_STEP_SUMMARY"
+            - name: Job Summary
+        run: |
+          echo "### 📺 Build Complete" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Job Summary - Artifact Upload
         if: ${{ inputs.upload_artifact }}
-        run: echo "### 📦 Artifact Upload
-
-          The artifact was uploaded successfully! Refresh and scroll down to view the artifact. Note that you must be signed in to GitHub to download it." >> "$GITHUB_STEP_SUMMARY"
+        run: |
+          {
+            echo "### 📦 Artifact Upload";
+            echo;
+            echo "The artifact was uploaded successfully! Refresh and scroll down to view the artifact. Note that you must be signed in to GitHub to download it.";
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Job Summary - Catbox Upload
         if: ${{ inputs.catbox_upload }}
-        run: echo "### 🐱 Catbox Upload
-
-          The Catbox upload was successful! Here is a permanent shareable link: ${CATBOX_URL}" >> "$GITHUB_STEP_SUMMARY"
+        run: |
+          {
+            echo "### 🐱 Catbox Upload";
+            echo;
+            echo "The Catbox upload was successful! Here is a permanent shareable link: ${CATBOX_URL}";
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Job Summary - Draft Release
         if: ${{ inputs.create_release }}
         run: |
           REPO_URL="https://github.com/${{ github.repository }}"
-          echo "### 🚀 Draft Release
-
-          The release draft has been created successfully! You can view your releases here: ${REPO_URL}/releases" >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "### 🚀 Draft Release";
+            echo;
+            echo "The release draft has been created successfully! You can view your releases here: ${REPO_URL}/releases";
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Job Summary - Link to remove GitHub Action runs
         run: |
           REPO_URL="https://github.com/${{ github.repository }}"
-          echo "### 🧹 Cleanup
-
-          You can remove previous GitHub Action runs here: ${REPO_URL}/actions/workflows/delete-workflow-runs.yml" >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "### 🧹 Cleanup";
+            echo;
+            echo "You can remove previous GitHub Action runs here: ${REPO_URL}/actions/workflows/delete-workflow-runs.yml";
+          } >> "$GITHUB_STEP_SUMMARY"
